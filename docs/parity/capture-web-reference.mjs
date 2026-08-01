@@ -1,14 +1,33 @@
-import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
+// Captures the web app's reference corpus — the visual specification the iOS app is
+// diffed against.
+//
+// Size is parameterised because the CI runner image decides which simulator is
+// available, and the corpus must match that device's logical viewport for a pixel
+// diff to mean anything. Defaults to 390x844 (iPhone 12/13/14).
+//
+//   node capture-web-reference.mjs [--width 390] [--height 844] [--scale 2] [--out DIR]
+//
+// Requires the web app running locally (npm run dev in get-gym-done-web).
+
+import { chromium } from 'playwright';
 import fs from 'node:fs';
 
-const OUT = '/tmp/claude-0/-home-user/f2cfa8df-8d71-52ae-b2fd-3a670bce7422/scratchpad/shots';
+const argv = new Map();
+for (let i = 2; i < process.argv.length; i += 2) {
+  argv.set(process.argv[i].replace(/^--/, ''), process.argv[i + 1]);
+}
+const WIDTH = Number(argv.get('width') ?? 390);
+const HEIGHT = Number(argv.get('height') ?? 844);
+const SCALE = Number(argv.get('scale') ?? 2);
+const OUT = argv.get('out') ?? 'docs/parity/web-reference';
 fs.mkdirSync(OUT, { recursive: true });
-const BASE = 'http://127.0.0.1:5173/get-gym-done-web/';
+const BASE = argv.get('base') ?? 'http://127.0.0.1:5173/get-gym-done-web/';
+console.log(`capturing ${WIDTH}x${HEIGHT} @${SCALE}x -> ${OUT}`);
 
-const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+const browser = await chromium.launch();
 const ctx = await browser.newContext({
-  viewport: { width: 390, height: 844 },
-  deviceScaleFactor: 2,
+  viewport: { width: WIDTH, height: HEIGHT },
+  deviceScaleFactor: SCALE,
   isMobile: true,
   hasTouch: true,
   colorScheme: 'dark',
