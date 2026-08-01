@@ -64,11 +64,14 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphonesimulator --show-sdk-version
           echo "::endgroup::"
-          echo "::group::Device types (390x844 candidates are iPhone 12/13/14)"
-          xcrun simctl list devicetypes | grep -Ei "iPhone (12|13|14|15|16|SE)" || true
+          echo "::group::All iPhone device types"
+          xcrun simctl list devicetypes | grep -i iphone || true
           echo "::endgroup::"
           echo "::group::Runtimes"
           xcrun simctl list runtimes | grep -i ios || true
+          echo "::endgroup::"
+          echo "::group::Already-instantiated devices"
+          xcrun simctl list devices available | grep -i iphone || true
           echo "::endgroup::"
 
       - name: Install XcodeGen
@@ -77,39 +80,56 @@ jobs:
       - name: Generate project
         run: xcodegen generate --spec project.yml
 
-      - name: Resolve the parity simulator
-        id: sim
-        run: |
-          # Parity requires a 390x844 logical viewport, which is iPhone 12/13/14.
-          # Prefer 14, then 13, then 12; fall back to any available iPhone so a
-          # missing device type degrades to "still builds" instead of a hard stop.
-          pick=""
-          for want in "iPhone 14" "iPhone 13" "iPhone 12"; do
-            if xcrun simctl list devicetypes | grep -q "$want (" ; then pick="$want"; break; fi
-          done
-          if [ -z "$pick" ]; then
-            pick=$(xcrun simctl list devicetypes | grep -oE 'iPhone [0-9]+' | tail -1)
-            echo "::warning::No 390x844 device type found; falling back to '$pick'. Screenshots will not be pixel-comparable."
-          fi
-          echo "device=$pick" >> "$GITHUB_OUTPUT"
-          echo "Using simulator: $pick"
-
-      - name: Build
+      # Compile check first, against a generic destination. This deliberately does
+      # not depend on any simulator existing, so a device-resolution problem can
+      # never be mistaken for a code problem.
+      - name: Build (compile check)
         run: |
           set -o pipefail
           xcodebuild build \
             -project GetGymDone.xcodeproj \
             -scheme GetGymDone \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+            -destination "generic/platform=iOS Simulator" \
             -derivedDataPath .build \
-            CODE_SIGNING_ALLOWED=NO \
-            | xcbeautify --renderer github-actions || \
-          xcodebuild build \
-            -project GetGymDone.xcodeproj \
-            -scheme GetGymDone \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
-            -derivedDataPath .build \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -40
+          echo "compile check OK"
+
+      - name: Resolve the parity simulator
+        id: sim
+        run: |
+          # Parity wants a 390x844 logical viewport (iPhone 12/13/14). Runner images
+          # rotate their preinstalled devices, so: try to CREATE the exact device type
+          # if it still ships, then fall back to whatever iPhone is available. Always
+          # resolve to a UDID — matching by name is what broke the first run.
+          runtime=$(xcrun simctl list runtimes --json \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s).runtimes.filter(x=>x.isAvailable&&/iOS/.test(x.name));r.sort((a,b)=>parseFloat(b.version)-parseFloat(a.version));console.log(r[0]?r[0].identifier:"")})')
+          echo "runtime: $runtime"
+
+          udid=""
+          for want in "iPhone 14" "iPhone 13" "iPhone 12"; do
+            dt=$(xcrun simctl list devicetypes --json \
+              | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const t=JSON.parse(s).devicetypes.find(x=>x.name==='$want');console.log(t?t.identifier:'')})")
+            if [ -n "$dt" ] && [ -n "$runtime" ]; then
+              if udid=$(xcrun simctl create "parity-$want" "$dt" "$runtime" 2>/dev/null); then
+                echo "created $want ($udid)"
+                echo "parity=true" >> "$GITHUB_OUTPUT"
+                break
+              fi
+              udid=""
+            fi
+          done
+
+          if [ -z "$udid" ]; then
+            udid=$(xcrun simctl list devices available --json \
+              | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const g=JSON.parse(s).devices;let best=null;for(const k of Object.keys(g))for(const d of g[k])if(/iPhone/.test(d.name)&&d.isAvailable&&!best)best=d;console.log(best?best.udid:"")})')
+            echo "::warning::No 390x844 device type available on this runner image; using an alternative device. The reference corpus must be re-captured at this device's size before pixel parity means anything."
+            echo "parity=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          test -n "$udid" || { echo "::error::could not resolve any iPhone simulator"; exit 1; }
+          xcrun simctl boot "$udid" 2>/dev/null || true
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          xcrun simctl list devices | grep "$udid" || true
 
       - name: UI tests + screenshot capture
         id: uitests
@@ -120,10 +140,10 @@ jobs:
           xcodebuild test \
             -project GetGymDone.xcodeproj \
             -scheme GetGymDone \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
             -derivedDataPath .build \
             -resultBundlePath TestResults.xcresult \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -60
 
       - name: Export screenshot attachments
         if: always()
