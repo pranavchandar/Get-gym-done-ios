@@ -1,0 +1,89 @@
+name: GetGymDone
+
+options:
+  bundleIdPrefix: com.pranavchandar
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  GymDoneKit:
+    path: GymDoneKit
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+
+targets:
+  GetGymDone:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - "Info.generated.plist"
+          - "**/*.md"
+    dependencies:
+      - package: GymDoneKit
+        product: GymDoneKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pranavchandar.getgymdone
+        PRODUCT_NAME: Get Gym Done
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_EMIT_LOC_STRINGS: YES
+    info:
+      path: App/Info.generated.plist
+      properties:
+        CFBundleDisplayName: Get Gym Done
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIUserInterfaceStyle: Automatic
+        ITSAppUsesNonExemptEncryption: false
+        UIAppFonts:
+          - Anton-Regular.ttf
+          - Inter-Regular.ttf
+          - Inter-Medium.ttf
+          - Inter-SemiBold.ttf
+          - Inter-Bold.ttf
+        UIBackgroundModes: []
+        NSPhotoLibraryUsageDescription: >-
+          Get Gym Done uses a photo only to set your profile picture. It is stored
+          on this device and never uploaded.
+
+  GetGymDoneUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: GetGymDone
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pranavchandar.getgymdone.uitests
+
+schemes:
+  GetGymDone:
+    build:
+      targets:
+        GetGymDone: all
+        GetGymDoneUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - GetGymDoneUITests
+      environmentVariables:
+        GGD_UI_TEST_FIXTURE: "1"

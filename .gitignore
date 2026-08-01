@@ -1,0 +1,9 @@
+.DS_Store
+*.xcodeproj
+*.xcworkspace
+.build/
+DerivedData/
+*.xcresult
+docs/parity/diff/
+.attachments/
+App/Info.generated.plist

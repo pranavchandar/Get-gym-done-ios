@@ -1,0 +1,13 @@
+# Declared visual deviations from the web reference.
+#
+# Every entry is a pixel-level change we INTENDED, justified by a defect number from
+# docs/DEFECT-LEDGER.md. The diff tool classifies differing pixels inside these regions
+# as "declared" and gates only the rest, so the parity check means:
+#   "the only things that differ are the things we said would differ".
+#
+# region is [x, y, width, height] in normalised 390x844 logical points.
+#
+# - screen: 05-home-today
+#   defect: 18
+#   region: [24, 300, 340, 40]
+#   reason: "Calendar header pluralisation fix"

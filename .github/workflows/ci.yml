@@ -1,0 +1,203 @@
+name: CI
+
+# This workflow is the project's only way to compile, test and screenshot the app.
+# Development happens in a Linux container with no Swift toolchain, no Xcode and no
+# simulator, so the loop is: push -> build/test/capture here -> commit the captured
+# screenshots and diff report back to the branch -> inspect them from the dev side.
+
+on:
+  push:
+    branches:
+      - "claude/**"
+      - main
+    paths-ignore:
+      - "docs/parity/ios-actual/**"
+      - "docs/parity/REPORT.md"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------- domain layer
+  # Fast Linux job. Everything accuracy-critical lives here, so this is the gate
+  # that matters most and it must stay under a minute.
+  kit:
+    name: GymDoneKit (Linux)
+    runs-on: ubuntu-latest
+    container: swift:5.10-jammy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify seed catalog is byte-identical to the web app's
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          echo "expected: $(cat docs/parity/seed.sha256)"
+          echo "actual:   $(sha256sum GymDoneKit/Sources/GymDoneKit/Resources/seed_data.json | cut -d' ' -f1)"
+          test "$(sha256sum GymDoneKit/Sources/GymDoneKit/Resources/seed_data.json | cut -d' ' -f1)" \
+             = "$(cat docs/parity/seed.sha256)"
+
+      - name: Build
+        working-directory: GymDoneKit
+        run: swift build -v
+
+      - name: Test
+        working-directory: GymDoneKit
+        run: swift test --parallel
+
+  # ---------------------------------------------------------------- iOS app
+  app:
+    name: iOS app (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # First runs are partly reconnaissance: the dev side cannot see this machine,
+      # so log what Xcode and which simulators are actually available.
+      - name: Toolchain reconnaissance
+        run: |
+          echo "::group::Xcode"
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+          echo "::endgroup::"
+          echo "::group::Device types (390x844 candidates are iPhone 12/13/14)"
+          xcrun simctl list devicetypes | grep -Ei "iPhone (12|13|14|15|16|SE)" || true
+          echo "::endgroup::"
+          echo "::group::Runtimes"
+          xcrun simctl list runtimes | grep -i ios || true
+          echo "::endgroup::"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate --spec project.yml
+
+      - name: Resolve the parity simulator
+        id: sim
+        run: |
+          # Parity requires a 390x844 logical viewport, which is iPhone 12/13/14.
+          # Prefer 14, then 13, then 12; fall back to any available iPhone so a
+          # missing device type degrades to "still builds" instead of a hard stop.
+          pick=""
+          for want in "iPhone 14" "iPhone 13" "iPhone 12"; do
+            if xcrun simctl list devicetypes | grep -q "$want (" ; then pick="$want"; break; fi
+          done
+          if [ -z "$pick" ]; then
+            pick=$(xcrun simctl list devicetypes | grep -oE 'iPhone [0-9]+' | tail -1)
+            echo "::warning::No 390x844 device type found; falling back to '$pick'. Screenshots will not be pixel-comparable."
+          fi
+          echo "device=$pick" >> "$GITHUB_OUTPUT"
+          echo "Using simulator: $pick"
+
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project GetGymDone.xcodeproj \
+            -scheme GetGymDone \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+            -derivedDataPath .build \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify --renderer github-actions || \
+          xcodebuild build \
+            -project GetGymDone.xcodeproj \
+            -scheme GetGymDone \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+            -derivedDataPath .build \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: UI tests + screenshot capture
+        id: uitests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          rm -rf TestResults.xcresult
+          xcodebuild test \
+            -project GetGymDone.xcodeproj \
+            -scheme GetGymDone \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+            -derivedDataPath .build \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Export screenshot attachments
+        if: always()
+        continue-on-error: true
+        run: |
+          mkdir -p docs/parity/ios-actual
+          if [ -d TestResults.xcresult ]; then
+            # Xcode 16 syntax; the legacy graph walk is kept as a fallback because
+            # this command changed shape between Xcode versions.
+            xcrun xcresulttool export attachments \
+              --path TestResults.xcresult \
+              --output-path .attachments 2>/dev/null \
+            || xcrun xcresulttool export --type directory \
+              --path TestResults.xcresult --output-path .attachments 2>/dev/null \
+            || echo "::warning::xcresulttool export failed; see structure dump below"
+
+            if [ -d .attachments ]; then
+              echo "::group::exported attachment tree"; find .attachments -type f | head -80; echo "::endgroup::"
+              # The UI test names each attachment after its reference shot, so a flat
+              # copy of every PNG lands them in the right filenames.
+              find .attachments -type f -name "*.png" -exec cp {} docs/parity/ios-actual/ \; 2>/dev/null || true
+              # manifest.json carries the human-readable names when files are hashed
+              if [ -f .attachments/manifest.json ]; then
+                node docs/parity/rename-from-manifest.mjs .attachments docs/parity/ios-actual || true
+              fi
+            fi
+          fi
+          echo "captured: $(ls -1 docs/parity/ios-actual 2>/dev/null | wc -l) png(s)"
+          ls -1 docs/parity/ios-actual 2>/dev/null | head -40 || true
+
+      - name: Diff against the web reference
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ "$(ls -1 docs/parity/ios-actual/*.png 2>/dev/null | wc -l)" -gt 0 ]; then
+            node docs/parity/diff.mjs \
+              --reference docs/parity/web-reference \
+              --actual docs/parity/ios-actual \
+              --deviations docs/parity/deviations.yml \
+              --out docs/parity/REPORT.md
+            cat docs/parity/REPORT.md
+          else
+            echo "No screenshots captured yet — skipping diff."
+          fi
+
+      - name: Commit captures back to the branch
+        if: always()
+        run: |
+          # This is what makes the loop closed: the dev container cannot run a
+          # simulator, so the artifacts have to come back through git to be seen.
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A docs/parity/ios-actual docs/parity/REPORT.md 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Nothing new to commit."
+          else
+            git commit -m "CI: simulator captures + parity report [skip ci]"
+            git pull --rebase origin "${GITHUB_REF_NAME}" || true
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Upload raw results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcresult-and-shots
+          path: |
+            TestResults.xcresult
+            docs/parity/ios-actual
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Fail if UI tests failed
+        if: always() && steps.uitests.outcome == 'failure'
+        run: |
+          echo "::error::UI tests failed — see the test step log above."
+          exit 1
