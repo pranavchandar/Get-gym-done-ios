@@ -29,6 +29,22 @@ pinned down in code, in doc comments, and in a shared JSON interchange format.
 covering dark + light themes, two accent palettes, empty + populated data, and every
 sheet, dialog and overlay. Capture script: `docs/parity/capture-web-reference.mjs`.
 
+### 1.1 Three reference sources, one of them canonical
+
+| Source | Standing |
+|---|---|
+| **`get-gym-done-web`** | **Canonical.** The brief is to replicate this app; where sources disagree, the web wins. |
+| `get-gym-done` (Android) | The original implementation. Its `seed_data.json` is **byte-identical** to the web's (SHA-256 `5627340b…`), which confirms the 155-exercise catalog is stable across implementations. Useful for cross-checking domain semantics. |
+| `app/reference/Get Gym Done — Master Engineering Handover.pdf` | The 27-page design specification both other apps were built from — tokens, shared components, iconography, navigation model, and per-screen specs, describing itself as "sufficient to rebuild the app pixel- and behaviour-perfect without the source." |
+
+The handover PDF is the **tiebreaker for ambiguity**, not a competing spec: where the web
+diverges from it, the web is what we replicate. It is most valuable for things the CSS
+doesn't record — original animation curves, spacing rationale, and the icon set's intent.
+
+Note its text layer is scrambled by subsetted fonts with broken `ToUnicode` maps; the body
+font decodes with the substitution map in `docs/parity/decode-handover.py`, and the page
+PNGs (`app/reference/pages/*.png`) render perfectly. Transcribing it is a Phase 0 task.
+
 ---
 
 ## 2. Platform decisions
@@ -274,42 +290,44 @@ Swift; entirely mechanical and verifiable with an icon-sheet diff.
 
 ---
 
-## 8. Fidelity policy
+## 8. Fidelity policy — **fix the defects** (confirmed)
 
-The web app ships with 42 documented defects (`get-gym-done-web/docs/qa/UI-TEARDOWN-REPORT.md`),
-three of which cause **unrecoverable data loss**. "Replicate with perfect accuracy" cannot
-sensibly mean reproducing those, so findings are sorted into three buckets.
+The web app ships with 42 documented defects
+(`get-gym-done-web/docs/qa/UI-TEARDOWN-REPORT.md`), three of which cause unrecoverable
+data loss. **The decision is to fix all of them.** Full dispositions are in
+[`DEFECT-LEDGER.md`](./DEFECT-LEDGER.md); the summary:
 
-### Bucket A — replicate exactly (default)
+| Disposition | Count |
+|---|---|
+| Fixed, behaviour only — the screen must still match the reference pixel for pixel | 6 |
+| Fixed, deliberately changes pixels — logged in the deviation register (§9.1) | 34 |
+| N/A on iOS — #4 solved by the platform, #37 is React-Router-specific | 2 |
 
-All layout, spacing, colour, typography, copy, iconography, animation timing; all domain
-maths; all state machines. Including cosmetic defects like "1 sessions", `~11 min` per
-exercise, the placeholder striped artwork, and the boilerplate warmup tab — **so the two
-apps stay visually identical**. These are tracked as a *shared* backlog to fix in both
-codebases simultaneously, not silently diverged here.
+What this does **not** change: the visual language. Every fix is a correction *within* the
+app's existing design system — same tokens, same type scale, same components, same
+iconography. Nothing is redesigned for its own sake, and the 31 reference screenshots
+remain the specification for everything not named in the ledger.
 
-### Bucket B — fix, because replicating would be harmful (5 items)
+Two consequences worth stating plainly:
 
-| QA # | Defect | Why it can't be replicated |
-|---|---|---|
-| 1 | `parseBackup` accepts any JSON object; importing a non-backup wipes all data and shows a success toast | Unrecoverable data loss |
-| 2 | "Rest day" checkbox in Build Your Routine permanently deletes that day's exercises | Unrecoverable data loss |
-| 3 | Days-per-week stepper roundtrip (7→2→7) destroys the trimmed days | Unrecoverable data loss |
-| 5 | Rest-timer ±30 s silently rewrites the default rest duration, with no Settings entry to undo it | Corrupts a preference with no user-visible path back |
-| 6 | Sets log with 0 kg × 0 reps, polluting volume, PRs and progression | Corrupts the data the whole app is built on |
+1. **Roughly a third of the fixes move pixels** — corrected pluralisation, unit suffixes,
+   a resume-workout state, WCAG-compliant accents in light mode. A blunt "≤2% diff on every
+   screen" gate would therefore fail by design, which is why §9.1 replaces it with a
+   deviation register.
+2. **Two items go beyond porting.** Fixing "logged history is write-only" (#26, #36)
+   requires a **session detail sheet that exists in none of the three implementations** —
+   new design, built in the existing visual language. And exercise artwork (#11) has no
+   source: `seed_data.json` names an `illustrationFilename` for all 155 exercises, but no
+   image assets exist in the web repo, the Android repo, or the handover PDF. The code-side
+   fix is the `MuscleMap` silhouette fallback; real illustrations are a content decision,
+   not a code task.
 
-Each fix is behaviour-only; none changes a pixel.
+### Platform-mandated divergence
 
-### Bucket C — platform-mandated divergence
-
-Keychain for the Gist token (not `localStorage`); local notifications for rest-timer
-completion (iOS suspends timers, the web relies on a live tab); share-sheet export and
-`fileImporter` in place of anchor-download / `<input type=file>`; `PhotosPicker`;
-Dynamic Type support; per-tab scroll position (which iOS gets right for free and the web
-gets wrong — QA #4); interactive back-swipe.
-
-> **Decision required before Phase 1.** Confirm Buckets B and C, or tell me to move items
-> between buckets. Everything else defaults to Bucket A.
+Independent of the defect list: Keychain for the Gist token (not `localStorage`); local
+notifications for rest-timer completion (iOS suspends timers, the web relies on a live tab);
+share-sheet export and `fileImporter` in place of anchor-download / `<input type=file>`;
+`PhotosPicker`; Dynamic Type; interactive back-swipe.
 
 ---
 
@@ -317,7 +335,7 @@ gets wrong — QA #4); interactive back-swipe.
 
 Two independent guarantees, one for pixels and one for behaviour.
 
-### 9.1 Visual parity — screenshot diffing
+### 9.1 Visual parity — screenshot diffing against a deviation register
 
 - **Reference corpus:** the 31 captured web states, 390×844 @2x (`docs/parity/web-reference/`).
 - **Device match:** **iPhone 14 simulator is exactly 390×844** — the same logical viewport as
@@ -325,11 +343,30 @@ Two independent guarantees, one for pixels and one for behaviour.
 - **iOS harness:** an XCUITest target that seeds the *same deterministic fixture* used for
   the web capture (fixed timestamps, fixed RNG, not `Date.now()`), walks the same 31 states,
   and writes PNGs.
-- **Diff:** a script emitting side-by-side + difference images and a per-screen mismatch
-  percentage. Gate at ≤2% non-antialiasing pixels; every diff reviewed by eye.
 - **Determinism:** the domain functions already take an injectable `now` parameter
   (`currentStreakDays(sessions, maxRestGap, now = Date.now())`), so freezing the clock ports
   cleanly. Animations disabled during capture.
+
+**The gate.** Because 34 defect fixes deliberately change pixels, a flat threshold would
+reject correct work. Instead every intentional change is declared up front in
+`docs/parity/deviations.yml`:
+
+```yaml
+- screen: 05-home-today
+  defect: 18          # "29 sessions" pluralisation
+  region: [24, 1040, 340, 1080]   # x, y, w, h in reference pixels
+  reason: "Calendar header pluralisation fix"
+```
+
+The diff script then classifies every differing pixel as **declared** (inside a registered
+region for that screen) or **undeclared**. Declared regions are reported and eyeballed;
+**undeclared difference is gated at ≤2% non-antialiasing pixels**. So the check becomes
+"the only things that differ are the things we said would differ" — which is a stronger
+guarantee than a blanket percentage, and it keeps the reference corpus meaningful instead
+of quietly rotting as fixes land.
+
+A screen whose fix is behaviour-only (6 of them) has no register entry and must match
+outright.
 
 ### 9.2 Behavioural parity — golden vectors generated from the web
 
@@ -354,10 +391,11 @@ assert JSON-equal modulo `exportedAt`; and the same against an Android export.
 simulator.** SwiftUI code can be authored here but not compiled or run here. That has to be
 solved in Phase 0, not discovered in Phase 5.
 
-Recommended: a **GitHub Actions `macos-15` runner** doing `xcodebuild build` +
+**Resolved:** a **GitHub Actions `macos-15` runner** doing `xcodebuild build` +
 `swift test` (GymDoneKit) + `xcrun simctl` screenshot capture + the parity diff, on every
-push. `GymDoneKit` additionally builds and tests on Linux, giving fast feedback on the
-accuracy-critical layer without burning macOS minutes.
+push. `pranavchandar/Get-gym-done-ios` is a **public** repository, so macOS runner minutes
+are free — no budget constraint. `GymDoneKit` additionally builds and tests on the Linux
+runner, giving fast feedback on the accuracy-critical layer in seconds rather than minutes.
 
 ---
 
