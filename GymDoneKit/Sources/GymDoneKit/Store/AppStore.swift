@@ -17,11 +17,10 @@ public func uid() -> String {
     UUID().uuidString
 }
 
-/// Epoch milliseconds "now" — the Swift stand-in for every bare `Date.now()` call in
-/// store.ts's actions. `internal` (not `private`) so `Backup.swift` can share it.
-func nowMillis() -> Int {
-    Int(Date().timeIntervalSince1970 * 1000)
-}
+// `nowMillis()` — the Swift stand-in for every bare `Date.now()` in store.ts — lives in
+// Domain/Dates.swift, alongside the other clock-dependent helpers, so the screenshot
+// harness has a single place to freeze time. It was briefly declared here too while the
+// domain layer did not yet exist; that duplicate is removed.
 
 // MARK: - Action parameter types
 //
