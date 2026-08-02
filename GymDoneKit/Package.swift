@@ -8,7 +8,9 @@ import PackageDescription
 // itself can only be compiled on a macOS CI runner).
 let package = Package(
     name: "GymDoneKit",
-    platforms: [.iOS(.v17), .macOS(.v13)],
+    // macOS 14 (not 13) because AppStore.swift uses `@Observable`/Observation, which
+    // requires macOS 14 / iOS 17. Bumped from .v13 as part of the Store/Backup port.
+    platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
         .library(name: "GymDoneKit", targets: ["GymDoneKit"])
     ],
