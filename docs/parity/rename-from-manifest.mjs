@@ -17,9 +17,33 @@ if (!src || !dest) {
 }
 fs.mkdirSync(dest, { recursive: true });
 
+// xcresulttool decorates each attachment as `<name>_<index>_<UUID>.png`, and emits
+// unnamed system captures as a bare `<UUID>.png`. Normalise both before anything else:
+// the diff tool matches captures to references purely by filename.
+function normalise(dir) {
+  if (!fs.existsSync(dir)) return;
+  const BARE_UUID = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\.png$/i;
+  const DECORATED = /^(.+?)_\d+_[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\.png$/i;
+  for (const file of fs.readdirSync(dir)) {
+    if (BARE_UUID.test(file)) {
+      // An unnamed capture — nothing to compare it against, and leaving it would
+      // pollute the corpus with a file no reference shot corresponds to.
+      fs.unlinkSync(path.join(dir, file));
+      console.log(`dropped unnamed capture ${file}`);
+      continue;
+    }
+    const m = file.match(DECORATED);
+    if (m) {
+      fs.renameSync(path.join(dir, file), path.join(dir, `${m[1]}.png`));
+      console.log(`normalised ${file} -> ${m[1]}.png`);
+    }
+  }
+}
+
 const manifestPath = path.join(src, 'manifest.json');
 if (!fs.existsSync(manifestPath)) {
-  console.log('no manifest.json — leaving already-copied files as they are');
+  console.log('no manifest.json — normalising already-copied filenames');
+  normalise(dest);
   process.exit(0);
 }
 
@@ -62,4 +86,5 @@ for (const { exported, human } of pairs(manifest)) {
   fs.copyFileSync(from, path.join(dest, safe));
   renamed++;
 }
+normalise(dest);
 console.log(`renamed ${renamed} attachment(s) into ${dest}`);
